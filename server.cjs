@@ -25,7 +25,7 @@ async function fetchAllServers(placeId) {
       if (data && data.data) allServers = allServers.concat(data.data);
       cursor = data.nextPageCursor;
 
-      if (cursor) await new Promise(r => setTimeout(r, 2000)); // API制限対策
+      if (cursor) await new Promise(r => setTimeout(r, 2000));
     } while (cursor);
 
     cachedServers[placeId] = allServers;
@@ -37,7 +37,7 @@ async function fetchAllServers(placeId) {
   return cachedServers[placeId];
 }
 
-// /servers/:placeId?page=1 は無視して統合して返す
+// サーバー情報取得
 app.get("/servers/:placeId", async (req, res) => {
   const placeId = req.params.placeId;
   try {
@@ -45,9 +45,19 @@ app.get("/servers/:placeId", async (req, res) => {
       await fetchAllServers(placeId);
     }
 
+    // 空きサーバーのみ、プレイヤー名も整理
+    const data = cachedServers[placeId].map(s => ({
+      id: s.id,
+      playing: s.playing,
+      maxPlayers: s.maxPlayers,
+      ping: s.ping || 0,
+      fps: s.fps || 0,
+      players: s.players ? s.players.map(p => p.name || p) : []
+    }));
+
     res.json({
-      totalServers: cachedServers[placeId].length,
-      data: cachedServers[placeId]
+      totalServers: data.length,
+      data
     });
   } catch (err) {
     console.error(err);
