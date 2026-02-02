@@ -1,6 +1,5 @@
-// server.cjs (CommonJS版)
+// server.cjs
 const express = require("express");
-const fetch = require("node-fetch");
 const cors = require("cors");
 
 const app = express();
@@ -20,15 +19,14 @@ async function fetchAllServers(placeId) {
             let url = `https://games.roblox.com/v1/games/${placeId}/servers/Public?sortOrder=Asc&limit=100`;
             if (cursor) url += `&cursor=${cursor}`;
 
+            // Node.js v18+ では fetch が組み込み
             const res = await fetch(url);
             const data = await res.json();
 
-            // データが配列であれば追加
             if (data && Array.isArray(data.data)) {
                 allServers = allServers.concat(data.data);
             }
 
-            // 次ページがあれば進む
             cursor = data.nextPageCursor;
             if (cursor) await new Promise(r => setTimeout(r, 1000)); // API制限対策
         } while (cursor);
@@ -46,12 +44,10 @@ async function fetchAllServers(placeId) {
 app.get("/servers/:placeId", async (req, res) => {
     const placeId = req.params.placeId;
     try {
-        // キャッシュが古い場合は再取得
         if (!cachedServers[placeId] || (Date.now() - (lastFetchTime[placeId] || 0)) > 5000) {
             await fetchAllServers(placeId);
         }
 
-        // data は必ず配列で返す
         const data = cachedServers[placeId] || [];
         res.json({
             totalServers: data.length,
