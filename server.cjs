@@ -5,10 +5,10 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 
-async function getServersPage(placeId, page = 1) {
+// Roblox API から全てのPublicサーバーを取得
+async function getAllServers(placeId) {
+    let allServers = [];
     let cursor = null;
-    let currentPage = 1;
-    let servers = [];
 
     try {
         do {
@@ -21,61 +21,28 @@ async function getServersPage(placeId, page = 1) {
             console.log("Response:", JSON.stringify(data));
 
             if (data && data.data) {
-                if (currentPage === page) {
-                    servers = data.data;
-                    break;
-                }
+                allServers = allServers.concat(data.data);
             }
 
             cursor = data.nextPageCursor;
-            currentPage++;
-            if (!cursor) break;
-        } while (true);
+        } while (cursor);
 
-        console.log(`Servers returned for page ${page}: ${servers.length}`);
+        console.log(`Total servers fetched: ${allServers.length}`);
     } catch (e) {
         console.error("Error fetching servers:", e.message);
     }
 
-    return servers;
-}
-
-async function getTotalPages(placeId) {
-    let allServersCount = 0;
-    let cursor = null;
-
-    try {
-        do {
-            let url = `https://games.roblox.com/v1/games/${placeId}/servers/Public?sortOrder=Asc&limit=100`;
-            if (cursor) url += `&cursor=${cursor}`;
-
-            const res = await fetch(url);
-            const data = await res.json();
-
-            if (data && data.data) allServersCount += data.data.length;
-
-            cursor = data.nextPageCursor;
-            if (!cursor) break;
-        } while (true);
-    } catch (e) {
-        console.error("Error counting servers:", e.message);
-    }
-
-    return Math.ceil(allServersCount / 100);
+    return allServers;
 }
 
 // APIルート
 app.get('/servers/:placeId', async (req, res) => {
     const placeId = req.params.placeId;
-    const page = parseInt(req.query.page) || 1;
 
     try {
-        const servers = await getServersPage(placeId, page);
-        const totalPages = await getTotalPages(placeId);
-
+        const servers = await getAllServers(placeId);
         res.json({
             totalServers: servers.length,
-            totalPages: totalPages,
             data: servers
         });
     } catch (err) {
