@@ -1,7 +1,7 @@
-// server.cjs
-import express from "express";
-import fetch from "node-fetch";
-import cors from "cors";
+// server.cjs (CommonJS版)
+const express = require("express");
+const fetch = require("node-fetch");
+const cors = require("cors");
 
 const app = express();
 app.use(cors());
@@ -9,60 +9,59 @@ app.use(cors());
 let cachedServers = {};
 let lastFetchTime = {};
 
+// fetchAllServers 関数はそのまま async/await
 async function fetchAllServers(placeId) {
-  if (!cachedServers[placeId]) cachedServers[placeId] = [];
-  let allServers = [];
-  let cursor = null;
+    if (!cachedServers[placeId]) cachedServers[placeId] = [];
+    let allServers = [];
+    let cursor = null;
 
-  try {
-    do {
-      let url = `https://games.roblox.com/v1/games/${placeId}/servers/Public?sortOrder=Asc&limit=100`;
-      if (cursor) url += `&cursor=${cursor}`;
+    try {
+        do {
+            let url = `https://games.roblox.com/v1/games/${placeId}/servers/Public?sortOrder=Asc&limit=100`;
+            if (cursor) url += `&cursor=${cursor}`;
 
-      const res = await fetch(url);
-      const data = await res.json();
+            const res = await fetch(url);
+            const data = await res.json();
 
-      if (data && data.data) allServers = allServers.concat(data.data);
-      cursor = data.nextPageCursor;
+            if (data && data.data) allServers = allServers.concat(data.data);
+            cursor = data.nextPageCursor;
 
-      if (cursor) await new Promise(r => setTimeout(r, 2000));
-    } while (cursor);
+            if (cursor) await new Promise(r => setTimeout(r, 2000));
+        } while (cursor);
 
-    cachedServers[placeId] = allServers;
-    lastFetchTime[placeId] = Date.now();
-  } catch (e) {
-    console.error("Error fetching servers:", e.message);
-  }
-
-  return cachedServers[placeId];
-}
-
-// サーバー情報取得
-app.get("/servers/:placeId", async (req, res) => {
-  const placeId = req.params.placeId;
-  try {
-    if (!cachedServers[placeId] || (Date.now() - (lastFetchTime[placeId]||0))>5000) {
-      await fetchAllServers(placeId);
+        cachedServers[placeId] = allServers;
+        lastFetchTime[placeId] = Date.now();
+    } catch (e) {
+        console.error("Error fetching servers:", e.message);
     }
 
-    // 空きサーバーのみ、プレイヤー名も整理
-    const data = cachedServers[placeId].map(s => ({
-      id: s.id,
-      playing: s.playing,
-      maxPlayers: s.maxPlayers,
-      ping: s.ping || 0,
-      fps: s.fps || 0,
-      players: s.players ? s.players.map(p => p.name || p) : []
-    }));
+    return cachedServers[placeId];
+}
 
-    res.json({
-      totalServers: data.length,
-      data
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
+app.get("/servers/:placeId", async (req, res) => {
+    const placeId = req.params.placeId;
+    try {
+        if (!cachedServers[placeId] || (Date.now() - (lastFetchTime[placeId]||0))>5000) {
+            await fetchAllServers(placeId);
+        }
+
+        const data = cachedServers[placeId].map(s => ({
+            id: s.id,
+            playing: s.playing,
+            maxPlayers: s.maxPlayers,
+            ping: s.ping || 0,
+            fps: s.fps || 0,
+            players: s.players ? s.players.map(p => p.name || p) : []
+        }));
+
+        res.json({
+            totalServers: data.length,
+            data
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 const port = process.env.PORT || 3000;
