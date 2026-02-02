@@ -1,5 +1,5 @@
 const express = require('express');
-const fetch = require('node-fetch'); // node-fetch@2 を使う
+const fetch = require('node-fetch'); // node-fetch@2
 const cors = require('cors');
 
 const app = express();
@@ -10,31 +10,43 @@ async function getAllServers(placeId) {
     let allServers = [];
     let cursor = null;
 
-    do {
-        let url = `https://games.roblox.com/v1/games/${placeId}/servers/Public?sortOrder=Asc&limit=100`;
-        if (cursor) url += `&cursor=${cursor}`;
+    try {
+        do {
+            let url = `https://games.roblox.com/v1/games/${placeId}/servers/Public?sortOrder=Asc&limit=100`;
+            if (cursor) url += `&cursor=${cursor}`;
 
-        const res = await fetch(url);
-        const data = await res.json();
+            const res = await fetch(url);
+            const data = await res.json();
 
-        if (data && data.data) {
-            allServers = allServers.concat(data.data);
-        }
+            if (data && data.data) {
+                allServers = allServers.concat(data.data);
+            }
 
-        cursor = data.nextPageCursor;
-    } while (cursor);
+            cursor = data.nextPageCursor;
+        } while (cursor);
+    } catch (e) {
+        console.error("Error fetching servers:", e.message);
+    }
 
     return allServers;
 }
 
-// ルート
+// APIルート
 app.get('/servers/:placeId', async (req, res) => {
     const placeId = req.params.placeId;
+
     try {
         const servers = await getAllServers(placeId);
-        res.json({ data: servers });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
+        const totalServers = servers.length;
+        const totalPages = Math.ceil(totalServers / 100);
+
+        res.json({
+            totalServers: totalServers,
+            totalPages: totalPages,
+            data: servers
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 });
 
