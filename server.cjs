@@ -1,6 +1,5 @@
-// server.cjs (CommonJS版)
+// server.cjs (CommonJS)
 const express = require("express");
-const fetch = require("node-fetch");
 const cors = require("cors");
 
 const app = express();
@@ -9,7 +8,6 @@ app.use(cors());
 let cachedServers = {};
 let lastFetchTime = {};
 
-// fetchAllServers 関数はそのまま async/await
 async function fetchAllServers(placeId) {
     if (!cachedServers[placeId]) cachedServers[placeId] = [];
     let allServers = [];
@@ -20,6 +18,7 @@ async function fetchAllServers(placeId) {
             let url = `https://games.roblox.com/v1/games/${placeId}/servers/Public?sortOrder=Asc&limit=100`;
             if (cursor) url += `&cursor=${cursor}`;
 
+            // Node.js 22 のグローバル fetch を使用
             const res = await fetch(url);
             const data = await res.json();
 
