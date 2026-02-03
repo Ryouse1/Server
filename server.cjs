@@ -1,76 +1,81 @@
 // server.cjs
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch");
+
+// node-fetch 対応（これが超重要）
+const fetch = require("node-fetch").default;
 
 const app = express();
 app.use(cors());
 
-// =======================
-// ストリーミング取得
-// =======================
-app.get("/servers/stream/:placeId", async (req, res) => {
-    const { placeId } = req.params;
-
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Transfer-Encoding", "chunked");
-    res.setHeader("Cache-Control", "no-cache");
-
+/**
+ * 全サーバー取得（cursor 全追跡）
+ */
+async function fetchAllServers(placeId) {
     let cursor = null;
-    let total = 0;
-    let page = 0;
+    let allServers = [];
+
+    do {
+        const params = new URLSearchParams({
+            limit: "100"
+        });
+
+        if (cursor) params.set("cursor", cursor);
+
+        const url =
+            `https://games.roblox.com/v1/games/${placeId}/servers/Public?` +
+            params.toString();
+
+        const res = await fetch(url);
+        if (!res.ok) {
+            throw new Error(`Roblox API error: ${res.status}`);
+        }
+
+        const json = await res.json();
+
+        if (Array.isArray(json.data)) {
+            allServers.push(...json.data);
+        }
+
+        cursor = json.nextPageCursor;
+
+        // Roblox rate limit 回避
+        if (cursor) {
+            await new Promise(r => setTimeout(r, 800));
+        }
+    } while (cursor);
+
+    return allServers;
+}
+
+/**
+ * API
+ * /servers?placeId=xxxxx
+ */
+app.get("/servers", async (req, res) => {
+    const { placeId } = req.query;
+
+    if (!placeId) {
+        return res.status(400).json({
+            error: "placeId is required"
+        });
+    }
 
     try {
-        do {
-            const url = new URL(
-                `https://games.roblox.com/v1/games/${placeId}/servers/Public`
-            );
-            url.searchParams.set("limit", "50"); // 100は使わない
-            if (cursor) url.searchParams.set("cursor", cursor);
+        const servers = await fetchAllServers(placeId);
 
-            const controller = new AbortController();
-            const t = setTimeout(() => controller.abort(), 10000);
-
-            const r = await fetch(url.toString(), { signal: controller.signal });
-            clearTimeout(t);
-
-            if (!r.ok) {
-                res.write(`ERROR status=${r.status}\n`);
-                break;
-            }
-
-            const json = await r.json();
-
-            page++;
-            const got = Array.isArray(json.data) ? json.data.length : 0;
-            total += got;
-
-            // 進捗
-            res.write(`page=${page} got=${got} total=${total}\n`);
-
-            // 1行1サーバー（JSONL）
-            if (Array.isArray(json.data)) {
-                for (const s of json.data) {
-                    res.write(JSON.stringify(s) + "\n");
-                }
-            }
-
-            cursor = json.nextPageCursor;
-
-            if (cursor) await new Promise(r => setTimeout(r, 800));
-        } while (cursor);
-
-        res.write(`DONE total=${total}\n`);
-        res.end();
-    } catch (e) {
-        res.write(`ERROR ${e.message}\n`);
-        res.end();
+        res.json({
+            placeId,
+            totalServers: servers.length,
+            data: servers
+        });
+    } catch (err) {
+        res.status(500).json({
+            error: err.message
+        });
     }
 });
 
-// =======================
-// 起動
-// =======================
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
