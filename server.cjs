@@ -32,15 +32,17 @@ async function fetchAllServers({ placeId, serverType, sortOrder, excludeFullGame
 
     try {
         do {
-            let url = `https://games.roblox.com/v1/games/${placeId}/${serverConfig.endpoint}?limit=${limit}`;
+            const baseUrl = `https://games.roblox.com/v1/games/${placeId}/${serverConfig.endpoint}`;
+            const params = new URLSearchParams({ limit });
             if (cursor) {
-                url += `&cursor=${cursor}`;
+                params.set("cursor", cursor);
             } else {
-                url += `&sortOrder=${sortOrder}`;
+                params.set("sortOrder", sortOrder);
             }
             if (serverType === "0") {
-                url += `&excludeFullGames=${excludeFullGames}`;
+                params.set("excludeFullGames", excludeFullGames);
             }
+            const url = `${baseUrl}?${params.toString()}`;
 
             // Node.js v18+ では fetch が組み込み
             const res = await fetch(url);
