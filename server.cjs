@@ -2,81 +2,72 @@
 const express = require("express");
 const cors = require("cors");
 
-// node-fetch 対応（これが超重要）
-const fetch = require("node-fetch").default;
-
 const app = express();
 app.use(cors());
 
+const BASE_URL = "https://games.roblox.com/v1/games";
+
 /**
- * 全サーバー取得（cursor 全追跡）
+ * Public Servers を nextPageCursor で限界まで取得
  */
 async function fetchAllServers(placeId) {
-    let cursor = null;
-    let allServers = [];
+  let allServers = [];
+  let cursor = null;
+  let page = 0;
 
-    do {
-        const params = new URLSearchParams({
-            limit: "100"
-        });
+  while (true) {
+    const url =
+      `${BASE_URL}/${placeId}/servers/Public` +
+      `?sortOrder=Asc` +
+      `&limit=100` +
+      `&excludeFullGames=false` +
+      (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
 
-        if (cursor) params.set("cursor", cursor);
+    const res = await fetch(url);
+    if (!res.ok) break;
 
-        const url =
-            `https://games.roblox.com/v1/games/${placeId}/servers/Public?` +
-            params.toString();
+    const json = await res.json();
 
-        const res = await fetch(url);
-        if (!res.ok) {
-            throw new Error(`Roblox API error: ${res.status}`);
-        }
+    if (!json || !Array.isArray(json.data)) break;
 
-        const json = await res.json();
+    // data が空でも cursor があれば続行
+    if (json.data.length > 0) {
+      allServers.push(...json.data);
+    }
 
-        if (Array.isArray(json.data)) {
-            allServers.push(...json.data);
-        }
+    cursor = json.nextPageCursor;
+    page++;
 
-        cursor = json.nextPageCursor;
+    // cursor が無くなったら終了
+    if (!cursor) break;
 
-        // Roblox rate limit 回避
-        if (cursor) {
-            await new Promise(r => setTimeout(r, 800));
-        }
-    } while (cursor);
+    // Roblox API 保護（速すぎると死ぬ）
+    await new Promise(r => setTimeout(r, 200));
+  }
 
-    return allServers;
+  return allServers;
 }
 
 /**
  * API
- * /servers?placeId=xxxxx
  */
-app.get("/servers", async (req, res) => {
-    const { placeId } = req.query;
+app.get("/servers/:placeId", async (req, res) => {
+  try {
+    const placeId = req.params.placeId;
+    const servers = await fetchAllServers(placeId);
 
-    if (!placeId) {
-        return res.status(400).json({
-            error: "placeId is required"
-        });
-    }
-
-    try {
-        const servers = await fetchAllServers(placeId);
-
-        res.json({
-            placeId,
-            totalServers: servers.length,
-            data: servers
-        });
-    } catch (err) {
-        res.status(500).json({
-            error: err.message
-        });
-    }
+    res.json({
+      count: servers.length,
+      data: servers
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: String(err)
+    });
+  }
 });
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
+  console.log("Roblox proxy running on port", port);
 });
