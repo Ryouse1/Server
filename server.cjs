@@ -1,73 +1,94 @@
-// server.cjs
 const express = require("express");
-const cors = require("cors");
-
 const app = express();
-app.use(cors());
 
-const BASE_URL = "https://games.roblox.com/v1/games";
+const PLACE_ID = process.env.PLACE_ID;
+const PORT = process.env.PORT || 3000;
 
-/**
- * Public Servers を nextPageCursor で限界まで取得
- */
-async function fetchAllServers(placeId) {
-  let allServers = [];
-  let cursor = null;
-  let page = 0;
-
-  while (true) {
-    const url =
-      `${BASE_URL}/${placeId}/servers/Public` +
-      `?sortOrder=Asc` +
-      `&limit=100` +
-      `&excludeFullGames=false` +
-      (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
-
-    const res = await fetch(url);
-    if (!res.ok) break;
-
-    const json = await res.json();
-
-    if (!json || !Array.isArray(json.data)) break;
-
-    // data が空でも cursor があれば続行
-    if (json.data.length > 0) {
-      allServers.push(...json.data);
-    }
-
-    cursor = json.nextPageCursor;
-    page++;
-
-    // cursor が無くなったら終了
-    if (!cursor) break;
-
-    // Roblox API 保護（速すぎると死ぬ）
-    await new Promise(r => setTimeout(r, 200));
-  }
-
-  return allServers;
+if (!PLACE_ID) {
+  throw new Error("PLACE_ID is required");
 }
 
-/**
- * API
- */
-app.get("/servers/:placeId", async (req, res) => {
-  try {
-    const placeId = req.params.placeId;
-    const servers = await fetchAllServers(placeId);
+/* ===============================
+   内部キャッシュ
+================================ */
+const serverMap = new Map();
 
-    res.json({
-      count: servers.length,
-      data: servers
+/* ===============================
+   設定
+================================ */
+const BASE_URL = "https://games.roblox.com/v1/games";
+const LIMIT = 100;
+const INTERVAL = 5000; // 5秒
+
+const queryPatterns = [
+  { sortOrder: "Asc",  excludeFullGames: false },
+  { sortOrder: "Desc", excludeFullGames: false },
+  { sortOrder: "Asc",  excludeFullGames: true  },
+  { sortOrder: "Desc", excludeFullGames: true  },
+];
+
+/* ===============================
+   1パターン深掘り
+================================ */
+async function fetchDeep(pattern) {
+  let cursor = null;
+
+  while (true) {
+    const params = new URLSearchParams({
+      limit: LIMIT,
+      sortOrder: pattern.sortOrder,
+      excludeFullGames: pattern.excludeFullGames,
     });
-  } catch (err) {
-    res.status(500).json({
-      error: String(err)
-    });
+
+    if (cursor) params.set("cursor", cursor);
+
+    const url = `${BASE_URL}/${PLACE_ID}/servers/Public?${params}`;
+
+    let json;
+    try {
+      const res = await fetch(url);
+      json = await res.json();
+    } catch {
+      break;
+    }
+
+    if (!json?.data) break;
+
+    for (const server of json.data) {
+      serverMap.set(server.id, server);
+    }
+
+    if (!json.nextPageCursor) break;
+    cursor = json.nextPageCursor;
   }
+}
+
+/* ===============================
+   全攻撃ループ
+================================ */
+async function sweep() {
+  for (const pattern of queryPatterns) {
+    await fetchDeep(pattern);
+  }
+  console.log(`[sweep] servers=${serverMap.size}`);
+}
+
+/* ===============================
+   定期更新
+================================ */
+setInterval(sweep, INTERVAL);
+sweep();
+
+/* ===============================
+   API
+================================ */
+app.get("/servers", (req, res) => {
+  res.json({
+    count: serverMap.size,
+    servers: [...serverMap.values()],
+  });
 });
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log("Roblox proxy running on port", port);
+app.listen(PORT, () => {
+  console.log("Server running on", PORT);
 });
