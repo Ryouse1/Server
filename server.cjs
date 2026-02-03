@@ -5,97 +5,72 @@ const fetch = require("node-fetch");
 
 const app = express();
 app.use(cors());
-app.use(express.json());
-
-const jobs = {}; // jobId -> { done, count, servers, error }
 
 // =======================
-// バックグラウンド取得
+// ストリーミング取得
 // =======================
-async function startFetchJob(jobId, placeId) {
-    jobs[jobId] = {
-        done: false,
-        count: 0,
-        servers: [],
-        error: null
-    };
+app.get("/servers/stream/:placeId", async (req, res) => {
+    const { placeId } = req.params;
+
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
 
     let cursor = null;
+    let total = 0;
+    let page = 0;
 
     try {
         do {
             const url = new URL(
                 `https://games.roblox.com/v1/games/${placeId}/servers/Public`
             );
-            url.searchParams.set("limit", "50");
+            url.searchParams.set("limit", "50"); // 100は使わない
             if (cursor) url.searchParams.set("cursor", cursor);
 
             const controller = new AbortController();
-            setTimeout(() => controller.abort(), 10000);
+            const t = setTimeout(() => controller.abort(), 10000);
 
-            const res = await fetch(url.toString(), {
-                signal: controller.signal
-            });
+            const r = await fetch(url.toString(), { signal: controller.signal });
+            clearTimeout(t);
 
-            if (!res.ok) {
-                throw new Error(`Roblox API ${res.status}`);
+            if (!r.ok) {
+                res.write(`ERROR status=${r.status}\n`);
+                break;
             }
 
-            const json = await res.json();
+            const json = await r.json();
 
+            page++;
+            const got = Array.isArray(json.data) ? json.data.length : 0;
+            total += got;
+
+            // 進捗
+            res.write(`page=${page} got=${got} total=${total}\n`);
+
+            // 1行1サーバー（JSONL）
             if (Array.isArray(json.data)) {
-                jobs[jobId].servers.push(...json.data);
-                jobs[jobId].count = jobs[jobId].servers.length;
+                for (const s of json.data) {
+                    res.write(JSON.stringify(s) + "\n");
+                }
             }
 
             cursor = json.nextPageCursor;
 
-            // レート制限回避
-            if (cursor) {
-                await new Promise(r => setTimeout(r, 800));
-            }
+            if (cursor) await new Promise(r => setTimeout(r, 800));
         } while (cursor);
 
-        jobs[jobId].done = true;
+        res.write(`DONE total=${total}\n`);
+        res.end();
     } catch (e) {
-        jobs[jobId].error = e.message;
-        jobs[jobId].done = true;
+        res.write(`ERROR ${e.message}\n`);
+        res.end();
     }
-}
-
-// =======================
-// API
-// =======================
-
-// 取得開始
-app.post("/servers/start/:placeId", (req, res) => {
-    const { placeId } = req.params;
-    const jobId = `${placeId}-${Date.now()}`;
-
-    startFetchJob(jobId, placeId);
-
-    res.json({
-        jobId,
-        status: "started"
-    });
 });
 
-// 進捗・結果取得
-app.get("/servers/job/:jobId", (req, res) => {
-    const job = jobs[req.params.jobId];
-
-    if (!job) {
-        return res.status(404).json({ error: "job not found" });
-    }
-
-    res.json({
-        done: job.done,
-        count: job.count,
-        error: job.error,
-        data: job.done ? job.servers : []
-    });
-});
-
+// =======================
+// 起動
+// =======================
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
