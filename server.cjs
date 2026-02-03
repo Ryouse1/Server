@@ -33,8 +33,12 @@ async function fetchAllServers({ placeId, serverType, sortOrder, excludeFullGame
 
     try {
         do {
-            let url = `https://games.roblox.com/v1/games/${placeId}/${serverConfig.endpoint}?sortOrder=${sortOrder}&limit=${limit}`;
-            if (cursor) url += `&cursor=${cursor}`;
+            let url = `https://games.roblox.com/v1/games/${placeId}/${serverConfig.endpoint}?limit=${limit}`;
+            if (cursor) {
+                url += `&cursor=${cursor}`;
+            } else {
+                url += `&sortOrder=${sortOrder}`;
+            }
             if (serverType === "0") {
                 url += `&excludeFullGames=${excludeFullGames}`;
             }
