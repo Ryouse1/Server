@@ -1,77 +1,102 @@
 // server.cjs
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch"); // ← 忘れずに
+const fetch = require("node-fetch");
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 
-let cachedServers = {};
-let lastFetchTime = {};
+const jobs = {}; // jobId -> { done, count, servers, error }
 
-function getServerTypeConfig(serverType) {
-    if (serverType === "1") return { endpoint: "private-servers" };
-    if (serverType === "0") return { endpoint: "servers/Public" };
-    return null;
-}
+// =======================
+// バックグラウンド取得
+// =======================
+async function startFetchJob(jobId, placeId) {
+    jobs[jobId] = {
+        done: false,
+        count: 0,
+        servers: [],
+        error: null
+    };
 
-async function fetchAllServers({ placeId, serverType, sortOrder, excludeFullGames, limit }) {
-    const serverConfig = getServerTypeConfig(serverType);
-    if (!serverConfig) throw new Error("serverType must be 0 or 1");
-
-    const cacheKey = `${placeId}:${serverType}:${sortOrder}:${excludeFullGames}:${limit}`;
-    if (!cachedServers[cacheKey]) cachedServers[cacheKey] = [];
-
-    let allServers = [];
     let cursor = null;
 
-    do {
-        const baseUrl = `https://games.roblox.com/v1/games/${placeId}/${serverConfig.endpoint}`;
-        const params = new URLSearchParams({ limit });
+    try {
+        do {
+            const url = new URL(
+                `https://games.roblox.com/v1/games/${placeId}/servers/Public`
+            );
+            url.searchParams.set("limit", "50");
+            if (cursor) url.searchParams.set("cursor", cursor);
 
-        if (cursor) params.set("cursor", cursor);
-        else params.set("sortOrder", sortOrder);
+            const controller = new AbortController();
+            setTimeout(() => controller.abort(), 10000);
 
-        if (serverType === "0") params.set("excludeFullGames", excludeFullGames);
+            const res = await fetch(url.toString(), {
+                signal: controller.signal
+            });
 
-        const res = await fetch(`${baseUrl}?${params}`);
-        const json = await res.json();
+            if (!res.ok) {
+                throw new Error(`Roblox API ${res.status}`);
+            }
 
-        if (Array.isArray(json.data)) allServers.push(...json.data);
-        cursor = json.nextPageCursor;
+            const json = await res.json();
 
-        if (cursor) await new Promise(r => setTimeout(r, 1000));
-    } while (cursor);
+            if (Array.isArray(json.data)) {
+                jobs[jobId].servers.push(...json.data);
+                jobs[jobId].count = jobs[jobId].servers.length;
+            }
 
-    cachedServers[cacheKey] = allServers;
-    lastFetchTime[cacheKey] = Date.now();
-    return allServers;
+            cursor = json.nextPageCursor;
+
+            // レート制限回避
+            if (cursor) {
+                await new Promise(r => setTimeout(r, 800));
+            }
+        } while (cursor);
+
+        jobs[jobId].done = true;
+    } catch (e) {
+        jobs[jobId].error = e.message;
+        jobs[jobId].done = true;
+    }
 }
 
-app.get("/servers/:placeId", async (req, res) => {
+// =======================
+// API
+// =======================
+
+// 取得開始
+app.post("/servers/start/:placeId", (req, res) => {
     const { placeId } = req.params;
-    const {
-        serverType = "0",
-        sortOrder = "Asc",
-        excludeFullGames = "false",
-        limit = "100"
-    } = req.query;
+    const jobId = `${placeId}-${Date.now()}`;
 
-    if (!getServerTypeConfig(serverType)) {
-        return res.status(400).json({ error: "serverType must be 0 or 1" });
-    }
+    startFetchJob(jobId, placeId);
 
-    const cacheKey = `${placeId}:${serverType}:${sortOrder}:${excludeFullGames}:${limit}`;
+    res.json({
+        jobId,
+        status: "started"
+    });
+});
 
-    if (!cachedServers[cacheKey] || Date.now() - (lastFetchTime[cacheKey] || 0) > 5000) {
-        await fetchAllServers({ placeId, serverType, sortOrder, excludeFullGames, limit });
+// 進捗・結果取得
+app.get("/servers/job/:jobId", (req, res) => {
+    const job = jobs[req.params.jobId];
+
+    if (!job) {
+        return res.status(404).json({ error: "job not found" });
     }
 
     res.json({
-        totalServers: cachedServers[cacheKey].length,
-        data: cachedServers[cacheKey]
+        done: job.done,
+        count: job.count,
+        error: job.error,
+        data: job.done ? job.servers : []
     });
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Server running on port ${port}`));
+app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+});
