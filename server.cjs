@@ -1,19 +1,16 @@
 // server.cjs
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch"); // Node18以下なら必要。v18以上は不要
+const fetch = require("node-fetch"); // CJS用
 
 const app = express();
 app.use(cors());
 
 const PORT = process.env.PORT || 3000;
-const WAIT_MS = 2000; // Roblox API制限対策の待機
+const WAIT_MS = 2000; // API制限対策
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/**
- * 1 sortOrderの全ページ取得
- */
 async function fetchBySort(placeId, sortOrder) {
   let cursor = null;
   let results = [];
@@ -23,28 +20,30 @@ async function fetchBySort(placeId, sortOrder) {
     if (sortOrder) url += `&sortOrder=${sortOrder}`;
     if (cursor) url += `&cursor=${cursor}`;
 
-    console.log("[FETCH]", sortOrder ?? "NONE", cursor ?? "START");
+    console.log("[FETCH]", sortOrder || "NONE", cursor || "START");
 
-    const res = await fetch(url);
-    if (!res.ok) break;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) break;
 
-    const json = await res.json();
-    if (!json?.data || json.data.length === 0) break;
+      const json = await res.json();
+      if (!json?.data || json.data.length === 0) break;
 
-    results.push(...json.data);
+      results.push(...json.data);
 
-    cursor = json.nextPageCursor;
-    if (!cursor) break;
+      cursor = json.nextPageCursor;
+      if (!cursor) break;
 
-    await sleep(WAIT_MS);
+      await sleep(WAIT_MS);
+    } catch (e) {
+      console.error("[ERROR fetchBySort]", e.message);
+      break;
+    }
   }
 
   return results;
 }
 
-/**
- * placeIdの全Publicサーバー取得（sortOrderなし / Asc / Desc）
- */
 async function fetchAllServers(placeId) {
   const all = [];
 
@@ -65,22 +64,16 @@ async function fetchAllServers(placeId) {
 
     return unique;
   } catch (e) {
-    console.error("[ERROR]", e.message);
+    console.error("[ERROR fetchAllServers]", e.message);
     return [];
   }
 }
 
-/**
- * APIルート
- * クライアントがアクセスしたときに全取得して返す
- */
 app.get("/servers/:placeId", async (req, res) => {
   const { placeId } = req.params;
-
   if (!placeId) return res.status(400).json({ error: "placeId required" });
 
   const servers = await fetchAllServers(placeId);
-
   res.json({
     total: servers.length,
     data: servers
