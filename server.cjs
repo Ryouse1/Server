@@ -1,104 +1,119 @@
-// server.cjs
+// server.cjs（CommonJS 完全版）
 const express = require("express");
 const cors = require("cors");
 
 const app = express();
 app.use(cors());
 
+const PORT = process.env.PORT || 3000;
+
+// Robloxに弾かれないための待ち時間
+const WAIT_MS = 1200;
+
+// placeId ごとのキャッシュ
+const cache = new Map();
+
+/**
+ * sleep
+ */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function fetchUntilEnd(placeId, sortOrder) {
+/**
+ * 1パターン（sortOrder別）を nextPageCursor がなくなるまで取得
+ */
+async function fetchBySort(placeId, sortOrder) {
   let cursor = null;
-  let lastCursor = "__START__";
-  let all = [];
+  let results = [];
 
   while (true) {
-    let url =
-      `https://games.roblox.com/v1/games/${placeId}/servers/Public?limit=100`;
-
+    let url = `https://games.roblox.com/v1/games/${placeId}/servers/Public?limit=100`;
     if (sortOrder) url += `&sortOrder=${sortOrder}`;
     if (cursor) url += `&cursor=${cursor}`;
 
-    console.log("[FETCH]", sortOrder || "NONE", cursor || "START");
+    console.log("[FETCH]", sortOrder ?? "NONE", cursor ?? "START");
 
-    let json;
-    try {
-      const res = await fetch(url); // Node22 global fetch
-      json = await res.json();
-    } catch (e) {
-      console.error("[FETCH ERROR]", e.message);
-      break;
-    }
+    const res = await fetch(url);
+    if (!res.ok) break;
 
-    // 終了条件①：データなし
-    if (!json?.data || json.data.length === 0) {
-      console.log("[END] empty data");
-      break;
-    }
+    const json = await res.json();
+    if (!json?.data || json.data.length === 0) break;
 
-    all.push(...json.data);
+    results.push(...json.data);
 
-    // 終了条件②：cursorが無い
-    if (!json.nextPageCursor) {
-      console.log("[END] no cursor");
-      break;
-    }
-
-    // 終了条件③：cursorが進んでない（無限防止）
-    if (json.nextPageCursor === lastCursor) {
-      console.log("[END] cursor stuck");
-      break;
-    }
-
-    lastCursor = cursor;
     cursor = json.nextPageCursor;
+    if (!cursor) break;
 
-    // API負荷対策
-    await sleep(400);
+    await sleep(WAIT_MS);
   }
 
-  return all;
+  return results;
 }
 
-app.get("/servers/:placeId", async (req, res) => {
-  const placeId = req.params.placeId;
+/**
+ * placeId の Public サーバーを「限界まで」集める
+ */
+async function fetchAllServers(placeId) {
   console.log("[REQUEST]", placeId);
 
+  const all = [];
+
+  // sortOrder なし / Asc / Desc 全部やる
+  const none = await fetchBySort(placeId, null);
+  const asc  = await fetchBySort(placeId, "Asc");
+  const desc = await fetchBySort(placeId, "Desc");
+
+  all.push(...none, ...asc, ...desc);
+
+  // jobId で重複除去
+  const map = new Map();
+  for (const s of all) {
+    if (s?.id) map.set(s.id, s);
+  }
+
+  const unique = [...map.values()];
+
+  console.log("[DONE]", placeId, "servers:", unique.length);
+
+  cache.set(placeId, {
+    time: Date.now(),
+    data: unique
+  });
+
+  return unique;
+}
+
+/**
+ * API
+ * /servers/:placeId
+ */
+app.get("/servers/:placeId", async (req, res) => {
+  const { placeId } = req.params;
+
   try {
-    // ① sortOrderなし（満員多め）
-    // ② Asc（空き多め）
-    // ③ Desc（補完）
-    const [none, asc, desc] = await Promise.all([
-      fetchUntilEnd(placeId, null),
-      fetchUntilEnd(placeId, "Asc"),
-      fetchUntilEnd(placeId, "Desc")
-    ]);
+    // 10秒キャッシュ
+    const cached = cache.get(placeId);
+    if (cached && Date.now() - cached.time < 10_000) {
+      return res.json({
+        cached: true,
+        total: cached.data.length,
+        data: cached.data
+      });
+    }
 
-    // jobId(id)で重複排除
-    const map = new Map();
-    [...none, ...asc, ...desc].forEach(s => {
-      if (s && s.id) map.set(s.id, s);
-    });
-
-    const merged = Array.from(map.values());
+    const data = await fetchAllServers(placeId);
 
     res.json({
-      placeId,
-      total: merged.length,
-      breakdown: {
-        none: none.length,
-        asc: asc.length,
-        desc: desc.length
-      },
-      data: merged
+      cached: false,
+      total: data.length,
+      data
     });
+
   } catch (e) {
-    console.error("[SERVER ERROR]", e);
-    res.status(500).json({ error: e.message });
+    console.error(e);
+    res.status(500).json({ error: "fetch failed" });
   }
 });
 
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
