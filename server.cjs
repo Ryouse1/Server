@@ -1,94 +1,82 @@
+// server.cjs
 const express = require("express");
+const cors = require("cors");
+const fetch = require("node-fetch");
+
 const app = express();
+app.use(cors());
 
-const PLACE_ID = process.env.PLACE_ID;
-const PORT = process.env.PORT || 3000;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-if (!PLACE_ID) {
-  throw new Error("PLACE_ID is required");
-}
-
-/* ===============================
-   内部キャッシュ
-================================ */
-const serverMap = new Map();
-
-/* ===============================
-   設定
-================================ */
-const BASE_URL = "https://games.roblox.com/v1/games";
-const LIMIT = 100;
-const INTERVAL = 5000; // 5秒
-
-const queryPatterns = [
-  { sortOrder: "Asc",  excludeFullGames: false },
-  { sortOrder: "Desc", excludeFullGames: false },
-  { sortOrder: "Asc",  excludeFullGames: true  },
-  { sortOrder: "Desc", excludeFullGames: true  },
-];
-
-/* ===============================
-   1パターン深掘り
-================================ */
-async function fetchDeep(pattern) {
+async function fetchAll(placeId, sortOrder) {
   let cursor = null;
+  let servers = [];
+  let page = 0;
 
   while (true) {
-    const params = new URLSearchParams({
-      limit: LIMIT,
-      sortOrder: pattern.sortOrder,
-      excludeFullGames: pattern.excludeFullGames,
-    });
+    let url =
+      `https://games.roblox.com/v1/games/${placeId}/servers/Public` +
+      `?limit=100&sortOrder=${sortOrder}`;
 
-    if (cursor) params.set("cursor", cursor);
-
-    const url = `${BASE_URL}/${PLACE_ID}/servers/Public?${params}`;
+    if (cursor) url += `&cursor=${cursor}`;
 
     let json;
     try {
       const res = await fetch(url);
       json = await res.json();
     } catch {
+      // 通信失敗 → スキップして次
       break;
     }
 
-    if (!json?.data) break;
+    if (!json || !Array.isArray(json.data)) break;
+    if (json.data.length === 0) break;
 
-    for (const server of json.data) {
-      serverMap.set(server.id, server);
-    }
-
-    if (!json.nextPageCursor) break;
+    servers.push(...json.data);
     cursor = json.nextPageCursor;
+
+    page++;
+    if (!cursor) break;
+
+    // API負荷対策
+    await sleep(400);
+    if (page > 50) break; // 無限防止
   }
+
+  return servers;
 }
 
-/* ===============================
-   全攻撃ループ
-================================ */
-async function sweep() {
-  for (const pattern of queryPatterns) {
-    await fetchDeep(pattern);
+app.get("/servers/:placeId", async (req, res) => {
+  const placeId = req.params.placeId;
+
+  try {
+    // Asc + Desc 両取り
+    const [asc, desc] = await Promise.all([
+      fetchAll(placeId, "Asc"),
+      fetchAll(placeId, "Desc")
+    ]);
+
+    // 重複排除（jobId基準）
+    const map = new Map();
+    [...asc, ...desc].forEach(s => {
+      if (s && s.id) map.set(s.id, s);
+    });
+
+    const merged = Array.from(map.values());
+
+    res.json({
+      placeId,
+      total: merged.length,
+      asc: asc.length,
+      desc: desc.length,
+      data: merged
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-  console.log(`[sweep] servers=${serverMap.size}`);
-}
-
-/* ===============================
-   定期更新
-================================ */
-setInterval(sweep, INTERVAL);
-sweep();
-
-/* ===============================
-   API
-================================ */
-app.get("/servers", (req, res) => {
-  res.json({
-    count: serverMap.size,
-    servers: [...serverMap.values()],
-  });
 });
 
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Server running on", PORT);
+  console.log("Server running on port", PORT);
 });
