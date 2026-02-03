@@ -1,4 +1,3 @@
-// server.cjs
 const express = require("express");
 const cors = require("cors");
 
@@ -10,9 +9,6 @@ const WAIT_MS = 2000; // Roblox API制限対策
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/**
- * 1 sortOrderの全ページ取得
- */
 async function fetchBySort(placeId, sortOrder) {
   let cursor = null;
   let results = [];
@@ -46,9 +42,6 @@ async function fetchBySort(placeId, sortOrder) {
   return results;
 }
 
-/**
- * placeIdの全Publicサーバー取得（sortOrderなし / Asc / Desc）
- */
 async function fetchAllServers(placeId) {
   const all = [];
 
@@ -74,13 +67,12 @@ async function fetchAllServers(placeId) {
   }
 }
 
-/**
- * ルートでアクセスしたときに最新情報を返す
- */
+// ルート
 app.get("/servers/:placeId", async (req, res) => {
   const { placeId } = req.params;
   if (!placeId) return res.status(400).json({ error: "placeId required" });
 
+  console.log("[REQUEST]", placeId);
   const servers = await fetchAllServers(placeId);
 
   res.json({
